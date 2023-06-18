@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 
 def Default(a):
     req = requests.get(a)
-    soup = BeautifulSoup(req.content,'lxml')
+    soup = BeautifulSoup(req.content,'html.parser')
     links = soup.find_all()
     for link in links:
         b = link.get('href')
