@@ -58,7 +58,7 @@ def full(a):
                 testreq = requests.get(lvl2)
                 stut = testreq.status_code
                 if stut == 200:
-                    soup = BeautifulSoup(req.content,'lxml')
+                    soup = BeautifulSoup(req.content,'html.parser')
                     links = soup.find_all()
                 for link in links:
                     b = link.get('href')
@@ -74,7 +74,7 @@ def full(a):
                 testreq = requests.get(lvl2)
                 stut = testreq.status_code
                 if stut == 200:
-                    soup = BeautifulSoup(req.content,'lxml')
+                    soup = BeautifulSoup(req.content,'html.parser')
                     links = soup.find_all()
                     for link in links:
                         b = link.get('href')
