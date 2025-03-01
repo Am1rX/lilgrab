@@ -1,0 +1,5 @@
+aiohttp>=3.8.0
+beautifulsoup4>=4.9.3
+rich>=10.0.0
+networkx>=2.8.0
+pyvis>=0.3.0 
