@@ -1,5 +1,9 @@
+scapy==2.5.0
+colorama==0.4.6
+requests==2.31.0
 aiohttp>=3.8.0
 beautifulsoup4>=4.9.3
-rich>=10.0.0
-networkx>=2.8.0
-pyvis>=0.3.0 
+networkx>=2.6.3
+pyvis>=0.2.1
+rich>=10.12.0
+urllib3>=1.26.7 
