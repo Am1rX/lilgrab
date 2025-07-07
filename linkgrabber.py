@@ -1,11 +1,12 @@
 import asyncio
 import aiohttp
 import urllib.parse
+import urllib.robotparser
 from bs4 import BeautifulSoup
 from typing import Set, Dict, List
 from datetime import datetime
 from rich.console import Console
-from rich.progress import Progress
+from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 import time
 import networkx as nx
 from pyvis.network import Network
@@ -15,98 +16,89 @@ from collections import defaultdict
 console = Console()
 
 class LinkGrabber:
+    """
+    An asynchronous web crawler that scans a website up to a specified depth,
+    collects all links, and generates an interactive site map.
+    """
     def __init__(self):
+        self.session: aiohttp.ClientSession | None = None
         self.visited_urls: Set[str] = set()
         self.found_links: Dict[str, dict] = {}
-        self.session = None
-        self.rate_limit = 0.1  # 100ms between requests
-        self.timeout = aiohttp.ClientTimeout(total=10)
-        self.graph = nx.DiGraph()  # Directed graph for site structure
-        self.similar_links = defaultdict(set)  # Track similar links
-
-    def normalize_url(self, base_url: str, href: str) -> str:
-        """Normalize and join URLs properly"""
-        try:
-            normalized = str(urllib.parse.urljoin(base_url, href))
-            # Remove trailing slashes and fragments
-            normalized = normalized.rstrip('/')
-            normalized = normalized.split('#')[0]
-            normalized = normalized.split('?')[0]  # Remove query parameters
-            return normalized
-        except Exception:
-            return ""
-
-    def is_similar_link(self, url1: str, url2: str) -> bool:
-        """Check if two URLs are similar (same path structure but different parameters)"""
-        try:
-            parsed1 = urllib.parse.urlparse(url1)
-            parsed2 = urllib.parse.urlparse(url2)
-            
-            # Compare domains and paths
-            return (parsed1.netloc == parsed2.netloc and 
-                   parsed1.path.rstrip('/') == parsed2.path.rstrip('/'))
-        except:
-            return False
-
-    def get_canonical_url(self, url: str) -> str:
-        """Get the canonical form of a URL by checking similar URLs"""
-        for group in self.similar_links.values():
-            if url in group:
-                return min(group)  # Use the shortest URL as canonical
-        return url
-
-    def add_similar_link(self, url: str):
-        """Add a URL to the similar links tracking"""
-        added = False
-        for key, group in self.similar_links.items():
-            if any(self.is_similar_link(url, existing) for existing in group):
-                group.add(url)
-                added = True
-                break
+        self.graph = nx.DiGraph()
+        self.target_domain: str = ""
         
-        if not added:
-            self.similar_links[url].add(url)
+        # Use a semaphore to limit concurrent requests instead of a fixed delay
+        self.semaphore = asyncio.Semaphore(10)
+        self.timeout = aiohttp.ClientTimeout(total=10)
+        self.headers = {'User-Agent': 'PythonLinkGrabber/1.0'}
+        
+        # For progress bar
+        self.progress: Progress | None = None
+        self.task_id = None
+        self.scanned_count = 0
+        
+        # For robots.txt parsing
+        self.robot_parser = urllib.robotparser.RobotFileParser()
+
+    def normalize_url(self, base_url: str, href: str) -> str | None:
+        """
+        Normalizes a URL by joining it with the base, sorting query parameters,
+        and removing the fragment. This is a more robust way to find canonical URLs.
+        """
+        try:
+            url = urllib.parse.urljoin(base_url, href.strip())
+            parsed = urllib.parse.urlparse(url)
+            
+            # Sort query parameters to handle URLs like /page?a=1&b=2 and /page?b=2&a=1 as the same
+            sorted_query = urllib.parse.urlencode(sorted(urllib.parse.parse_qsl(parsed.query)))
+            
+            # Reconstruct the URL with a cleaned path and sorted query, removing the fragment
+            path = parsed.path if parsed.path else '/'
+            normalized = urllib.parse.urlunparse((
+                parsed.scheme,
+                parsed.netloc.lower(),
+                path,
+                '',
+                sorted_query,
+                ''  # Remove fragment
+            ))
+            return normalized
+        except Exception as e:
+            console.print(f"[bright_black]Could not normalize URL '{href}': {e}[/bright_black]")
+            return None
 
     def get_domain(self, url: str) -> str:
-        """Extract domain from URL"""
+        """Extracts the domain (netloc) from a URL."""
         try:
-            parsed = urllib.parse.urlparse(url)
-            return parsed.netloc
+            return urllib.parse.urlparse(url).netloc
         except:
-            return url
-
-    def get_path(self, url: str) -> str:
-        """Extract path from URL"""
-        try:
-            parsed = urllib.parse.urlparse(url)
-            return parsed.path or '/'
-        except:
-            return '/'
+            return ''
 
     async def init_session(self):
-        """Initialize aiohttp session"""
-        if not self.session:
-            self.session = aiohttp.ClientSession(timeout=self.timeout)
+        """Initializes the aiohttp ClientSession."""
+        if not self.session or self.session.closed:
+            self.session = aiohttp.ClientSession(timeout=self.timeout, headers=self.headers)
 
     async def close_session(self):
-        """Close aiohttp session"""
-        if self.session:
+        """Closes the aiohttp ClientSession."""
+        if self.session and not self.session.closed:
             await self.session.close()
-            self.session = None
 
     async def fetch_url(self, url: str) -> dict:
-        """Fetch a URL and return detailed information"""
+        """Fetches a single URL and returns its details."""
         try:
-            async with self.session.get(url) as response:
-                content = await response.read()
-                return {
-                    'url': url,
-                    'status': response.status,
-                    'content_type': response.headers.get('content-type', 'unknown'),
-                    'size': len(content),
-                    'content': content,
-                    'timestamp': datetime.now().isoformat()
-                }
+            # Use the semaphore to limit concurrency
+            async with self.semaphore:
+                async with self.session.get(url, allow_redirects=True) as response:
+                    content = await response.read()
+                    return {
+                        'url': str(response.url), # Use the final URL after redirects
+                        'status': response.status,
+                        'content_type': response.headers.get('content-type', 'unknown'),
+                        'size': len(content),
+                        'content': content,
+                        'timestamp': datetime.now().isoformat()
+                    }
         except Exception as e:
             return {
                 'url': url,
@@ -115,40 +107,51 @@ class LinkGrabber:
                 'timestamp': datetime.now().isoformat()
             }
 
-    async def extract_links(self, url: str, html_content: bytes) -> List[str]:
-        """Extract all links from HTML content"""
+    async def extract_links(self, base_url: str, html_content: bytes) -> List[str]:
+        """Extracts all valid, in-domain links from HTML content."""
         links = set()
         try:
             soup = BeautifulSoup(html_content, 'html.parser')
             for tag in soup.find_all(['a', 'link', 'script', 'img', 'form']):
                 href = tag.get('href') or tag.get('src') or tag.get('action')
-                if href:
-                    normalized_url = self.normalize_url(url, href)
-                    if normalized_url and not normalized_url.startswith(('mailto:', 'tel:', 'javascript:')):
-                        self.add_similar_link(normalized_url)
-                        canonical_url = self.get_canonical_url(normalized_url)
-                        links.add(canonical_url)
+                if not href:
+                    continue
+
+                normalized_url = self.normalize_url(base_url, href)
+                if not normalized_url or normalized_url.startswith(('mailto:', 'tel:', 'javascript:')):
+                    continue
+
+                # Ensure we only scan links within the target domain
+                if self.get_domain(normalized_url) == self.target_domain:
+                    links.add(normalized_url)
         except Exception as e:
-            console.print(f"[red]Error extracting links from {url}: {e}[/red]")
+            console.print(f"[red]Error extracting links from {base_url}: {e}[/red]")
         return list(links)
 
-    async def scan_url(self, url: str, max_depth: int = 2, current_depth: int = 0):
-        """Scan a URL for links with depth control"""
+    async def scan_url(self, url: str, max_depth: int, current_depth: int = 0):
+        """Recursively scans a URL, respecting depth limits and visited status."""
         if current_depth > max_depth or url in self.visited_urls:
             return
 
-        self.visited_urls.add(url)
-        await asyncio.sleep(self.rate_limit)  # Rate limiting
+        # Check robots.txt before fetching
+        if not self.robot_parser.can_fetch(self.headers['User-Agent'], url):
+            console.print(f"[yellow]Skipping (disallowed by robots.txt): {url}[/yellow]")
+            return
 
+        self.visited_urls.add(url)
+        
         result = await self.fetch_url(url)
         self.found_links[url] = result
 
-        # Add node to graph
-        node_attrs = {
-            'title': f"Status: {result.get('status')}\nType: {result.get('content_type', 'unknown')}",
-            'label': self.get_path(url)[:30] + '...' if len(self.get_path(url)) > 30 else self.get_path(url)
-        }
-        self.graph.add_node(url, **node_attrs)
+        # Update progress bar
+        self.scanned_count += 1
+        if self.progress and self.task_id is not None:
+            self.progress.update(self.task_id, description=f"[cyan]Scanned: [bold]{self.scanned_count}[/bold] URLs")
+
+        # Add node to the graph
+        path = urllib.parse.urlparse(url).path or '/'
+        label = path[:30] + '...' if len(path) > 30 else path
+        self.graph.add_node(url, label=label, title=f"Status: {result.get('status', 0)}")
 
         if result.get('status') == 200 and 'text/html' in result.get('content_type', ''):
             links = await self.extract_links(url, result['content'])
@@ -156,192 +159,154 @@ class LinkGrabber:
                 tasks = []
                 for link in links:
                     if link not in self.visited_urls:
-                        # Add edge to graph
                         self.graph.add_edge(url, link)
                         tasks.append(self.scan_url(link, max_depth, current_depth + 1))
                 await asyncio.gather(*tasks)
 
     def create_visualization(self, output_file: str = "site_map.html"):
-        """Create an interactive visualization of the crawled site"""
-        # Create a Pyvis network
-        net = Network(height="750px", width="100%", bgcolor="#ffffff", font_color="black")
+        """Creates an interactive Pyvis visualization of the site structure."""
+        if not self.graph.nodes:
+            console.print("[yellow]Graph is empty, skipping visualization.[/yellow]")
+            return
+
+        net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white", notebook=False)
         
-        # Add nodes with different colors based on status
-        for node, data in self.graph.nodes(data=True):
-            status = self.found_links[node].get('status', 0)
-            content_type = self.found_links[node].get('content_type', 'unknown')
+        for node in self.graph.nodes():
+            data = self.found_links.get(node, {})
+            status = data.get('status', 0)
+            content_type = data.get('content_type', 'unknown')
             
-            # Determine node color based on content type and status
-            if status == 200:
-                if 'html' in content_type.lower():
-                    color = "#97c2fc"  # blue for HTML
-                elif 'image' in content_type.lower():
-                    color = "#ffb347"  # orange for images
-                elif 'javascript' in content_type.lower():
-                    color = "#98FB98"  # green for JS
-                elif 'css' in content_type.lower():
-                    color = "#DDA0DD"  # purple for CSS
-                else:
-                    color = "#97c2fc"  # default blue
-            else:
-                color = "#fb7e81"  # red for errors
+            if status >= 400: color = "#fb7e81"  # Red for client/server errors
+            elif status >= 300: color = "#ffb347"  # Orange for redirects
+            elif status == 200: color = "#97c2fc"  # Blue for success
+            else: color = "#cccccc" # Grey for unknown/error
+            
+            title = f"URL: {node}\nStatus: {status}\nType: {content_type}"
+            net.add_node(node, label=self.graph.nodes[node]['label'], title=title, color=color)
 
-            # Create detailed title with similar URLs
-            similar_urls = [u for u in self.similar_links.get(node, set()) if u != node]
-            title = f"Status: {status}\nType: {content_type}"
-            if similar_urls:
-                title += "\n\nSimilar URLs:"
-                for similar in similar_urls[:5]:  # Show up to 5 similar URLs
-                    title += f"\n- {similar}"
-                if len(similar_urls) > 5:
-                    title += f"\n... and {len(similar_urls) - 5} more"
-
-            # Add node with onclick event to open URL
-            net.add_node(node, 
-                        title=title,
-                        label=self.get_path(node)[:30] + '...' if len(self.get_path(node)) > 30 else self.get_path(node),
-                        color=color)
-
-        # Add edges
-        for edge in self.graph.edges():
-            net.add_edge(edge[0], edge[1])
-
-        # Set physics layout and enable URL clicking
+        net.add_edges(self.graph.edges())
+        
         net.set_options("""
         var options = {
-            "physics": {
-                "forceAtlas2Based": {
-                    "gravitationalConstant": -100,
-                    "springLength": 100
-                },
-                "minVelocity": 0.75,
-                "solver": "forceAtlas2Based"
-            },
-            "interaction": {
-                "hover": true,
-                "navigationButtons": true,
-                "keyboard": {
-                    "enabled": true
-                }
-            },
-            "nodes": {
-                "shape": "dot",
-                "size": 20,
-                "font": {
-                    "size": 12,
-                    "face": "Tahoma"
-                }
-            }
+          "physics": { "solver": "forceAtlas2Based", "forceAtlas2Based": { "gravitationalConstant": -100, "springLength": 100 } },
+          "interaction": { "hover": true, "navigationButtons": true, "keyboard": true },
+          "nodes": { "shape": "dot", "size": 16 }
         }
         """)
-
-        # Add JavaScript to make nodes clickable
-        net.html += """
+        
+        # Add JS to open node URL in a new tab on click
+        net.html = net.html.replace("</body>", """
         <script>
         network.on("click", function(params) {
-            if (params.nodes.length > 0) {
-                var node = params.nodes[0];
-                window.open(node, '_blank');
-            }
+          if (params.nodes.length > 0) {
+            var node = params.nodes[0];
+            window.open(node, '_blank');
+          }
         });
         </script>
-        """
+        </body>""")
 
-        # Save the visualization
         try:
             net.save_graph(output_file)
-            console.print(f"\n[green]Site map visualization saved to: {os.path.abspath(output_file)}[/green]")
+            console.print(f"\n[green]Site map visualization saved to: [link=file://{os.path.abspath(output_file)}]{os.path.abspath(output_file)}[/link][/green]")
         except Exception as e:
             console.print(f"\n[red]Error saving visualization: {e}[/red]")
 
-    async def scan(self, url: str, max_depth: int = 2):
-        """Main scanning function"""
+    async def scan(self, url: str, max_depth: int):
+        """Main entry point for the scanning process."""
         await self.init_session()
-        console.print(f"[bold green]Starting scan of {url}[/bold green]")
+        self.target_domain = self.get_domain(url)
+        console.print(f"[bold green]Starting scan of [underline]{url}[/underline] (Domain: {self.target_domain})[/bold green]")
         
-        start_time = time.time()
+        # Fetch and parse robots.txt
+        robots_url = urllib.parse.urljoin(url, '/robots.txt')
+        self.robot_parser.set_url(robots_url)
         try:
-            await self.scan_url(url, max_depth)
+            await asyncio.get_event_loop().run_in_executor(None, self.robot_parser.read)
+            console.print(f"[bright_black]Successfully parsed {robots_url}[/bright_black]")
+        except Exception as e:
+            console.print(f"[yellow]Could not fetch or parse robots.txt: {e}[/yellow]")
+
+        start_time = time.time()
+        
+        progress_columns = [
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+        ]
+        
+        try:
+            with Progress(*progress_columns, console=console) as progress:
+                self.progress = progress
+                self.task_id = self.progress.add_task("[cyan]Crawling...", total=None) # Indeterminate
+                await self.scan_url(url, max_depth)
+                self.progress.update(self.task_id, total=1, completed=1, description="[green]Crawl complete!")
         finally:
             await self.close_session()
         
         duration = time.time() - start_time
         self.print_results(duration)
-        
-        # Create visualization
         self.create_visualization()
 
     def print_results(self, duration: float):
-        """Print detailed scan results"""
-        console.print("\n[bold blue]Scan Results[/bold blue]")
-        console.print(f"Total unique URLs scanned: {len(self.visited_urls)}")
-        console.print(f"Total similar URLs found: {sum(len(group) for group in self.similar_links.values()) - len(self.visited_urls)}")
-        console.print(f"Scan duration: {duration:.2f} seconds")
+        """Prints a summary of the scan results."""
+        console.print("\n[bold blue]----- Scan Summary -----[/bold blue]")
+        console.print(f"Total unique URLs scanned: [bold]{len(self.visited_urls)}[/bold]")
+        console.print(f"Scan duration: [bold]{duration:.2f} seconds[/bold]")
         
-        # Group results by status
-        status_groups = {}
+        status_groups = defaultdict(list)
         for url, data in self.found_links.items():
-            status = data.get('status', 0)
-            if status not in status_groups:
-                status_groups[status] = []
-            status_groups[status].append((url, data))
+            status_groups[data.get('status', 0)].append(url)
 
-        # Print results by status code
         for status in sorted(status_groups.keys()):
-            color = "green" if status == 200 else "red"
-            console.print(f"\n[{color}]Status {status}:[/{color}]")
-            for url, data in status_groups[status]:
-                console.print(f"  URL: {url}")
-                similar = [u for u in self.similar_links.get(url, set()) if u != url]
-                if similar:
-                    console.print(f"    Similar URLs: {len(similar)}")
-                if 'content_type' in data:
-                    console.print(f"    Type: {data['content_type']}")
-                if 'size' in data:
-                    console.print(f"    Size: {data['size']} bytes")
-                if 'error' in data:
-                    console.print(f"    Error: {data['error']}")
+            color = "green" if 200 <= status < 300 else "yellow" if 300 <= status < 400 else "red"
+            console.print(f"\n[bold {color}]Status {status}: {len(status_groups[status])} URLs[/bold {color}]")
+            # for url in status_groups[status][:5]: # Print first 5 for brevity
+            #     console.print(f"  - {url}")
+            # if len(status_groups[status]) > 5:
+            #     console.print(f"  ... and {len(status_groups[status]) - 5} more.")
 
 def validate_url(url: str) -> bool:
-    """Validate URL format"""
+    """Validates if the URL has a scheme and netloc."""
     try:
         result = urllib.parse.urlparse(url)
         return all([result.scheme, result.netloc])
-    except Exception:
+    except:
         return False
 
 async def main():
+    """Main function to run the crawler from the command line."""
     console.print('''
-[bold cyan]Enhanced Link Grabber[/bold cyan]
-    1. Quick Scan (depth=1)
-    2. Full Scan (depth=2)
-    3. Deep Scan (depth=3)
-    4. Exit
-    ''')
-
+[bold]An interactive site map generator.[/bold]
+''')
+    
     while True:
         try:
-            url = console.input("[yellow]Enter URL:[/yellow] ").strip()
+            url = console.input("[bold yellow]Enter the full URL to scan (e.g., https://www.google.com):[/bold yellow] ").strip()
             if not validate_url(url):
-                console.print("[red]Invalid URL! Please include http:// or https://[/red]")
+                console.print("[red]Invalid URL! Please include the scheme (http:// or https://).[/red]\n")
                 continue
 
-            option = console.input("[yellow]Select option:[/yellow] ")
+            depth_str = console.input("[bold yellow]Enter scan depth (1=Quick, 2=Full, 3=Deep):[/bold yellow] ").strip()
+            depth = int(depth_str) if depth_str.isdigit() and int(depth_str) > 0 else 1
             
-            if option == '4':
-                break
-                
-            depth = {'1': 1, '2': 2, '3': 3}.get(option, 1)
             grabber = LinkGrabber()
             await grabber.scan(url, depth)
             
-        except KeyboardInterrupt:
-            console.print("\n[red]Scan interrupted by user[/red]")
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            console.print("\n\n[bold red]Scan interrupted by user. Exiting.[/bold red]")
             break
         except Exception as e:
-            console.print(f"[red]Error: {e}[/red]")
+            console.print(f"\n[bold red]An unexpected error occurred: {e}[/bold red]")
+        
+        if console.input("\n[yellow]Scan another site? (y/n): [/yellow]").lower() != 'y':
+            break
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        console.print("\n[bold red]Program terminated.[/bold red]")
 
-#Created by AMIRX
