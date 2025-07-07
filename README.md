@@ -1,107 +1,103 @@
-# Enhanced Link Grabber
+# 📖 Enhanced Link Grabber & Site Map Visualizer
 
-A powerful asynchronous web crawler and site mapper built in Python that visualizes website structure and relationships.
+## Overview
 
-## Features
+This is a powerful and fast asynchronous web crawler written in Python. It's designed to scan a website up to a specified depth, discover all internal links, and generate a beautiful, interactive site map visualization.
 
-- 🚀 **Asynchronous Crawling**: Fast and efficient website scanning using `aiohttp`
-- 📊 **Interactive Visualization**: Creates beautiful, interactive site maps using `pyvis` and `networkx`
-- 🎯 **Smart URL Detection**: Identifies and groups similar URLs to reduce redundancy
-- 📱 **Multi-Resource Support**: Tracks HTML, images, JavaScript, CSS, and other web resources
-- 🔍 **Depth Control**: Three scanning modes (Quick, Full, and Deep) for different levels of analysis
-- 📈 **Detailed Reporting**: Comprehensive status reports and error tracking
-- ⚡ **Rate Limiting**: Built-in rate limiting to prevent server overload
+Perfect for:
 
-## Installation
+* SEO analysis
+* Understanding a website's structure
+* Finding broken links
 
-1. Clone the repository:
+The script uses `asyncio` and `aiohttp` for high-speed, concurrent scanning, and generates a visual graph using `pyvis` and `networkx`. The command-line UI is powered by `rich` for an elegant experience.
+
+---
+
+## ✨ Features
+
+* **Asynchronous Scanning**: Scans multiple pages concurrently using `asyncio` and `aiohttp`.
+* **Depth Control**: Set scan depth (e.g., 1 for shallow, 3 for deep crawl).
+* **Interactive Visualization**: Generates a `site_map.html` with a zoomable, clickable graph.
+* **Domain-Scoped**: Only scans pages within the same domain.
+* **robots.txt Aware**: Skips paths disallowed by `robots.txt`.
+* **Elegant CLI**: Colorful and informative command-line interface using `rich`.
+* **URL Normalization**: Prevents duplicate scans by handling URL variations smartly.
+
+---
+
+## ⚙️ Requirements
+
+Requires **Python 3.7+** and the following libraries:
+
+* `aiohttp`
+* `beautifulsoup4`
+* `rich`
+* `networkx`
+* `pyvis`
+
+---
+
+## 🚀 Installation & Setup
+
+1. **Clone or Download** this repository.
+2. Save the script as `link_grabber.py`
+3. (Optional) Create and activate a virtual environment:
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+4. Install the required packages:
+
+   ```bash
+   pip install aiohttp beautifulsoup4 rich networkx pyvis
+   ```
+
+---
+
+## 🖥️ How to Use
+
+Run the script from terminal:
+
 ```bash
-git clone https://github.com/Am1rX/lilgrab
-cd lilgrab
+python link_grabber.py
 ```
 
-2. Install required dependencies:
+### You'll be prompted to:
+
+* **Enter the full URL** (e.g., `https://www.google.com`)
+* **Select scan depth** (1, 2, or 3)
+
+A real-time progress bar will appear as the crawler works.
+
 ```bash
-pip install -r requirements.txt
+[bold]An interactive site map generator.[/bold]
+[bold yellow]Enter the full URL to scan (e.g., https://www.google.com):[/bold yellow]
 ```
 
-Required packages:
-- aiohttp
-- beautifulsoup4
-- networkx
-- pyvis
-- rich
+---
 
-## Usage
+## 📊 Output
 
-Run the script:
-```bash
-python linkgrabber.py
-```
+After the scan completes:
 
-The program will present you with four options:
-1. Quick Scan (depth=1) - Scans only the immediate links on the page
-2. Full Scan (depth=2) - Scans immediate links and their child pages
-3. Deep Scan (depth=3) - Performs a deeper crawl of the website
-4. Exit
+* **Terminal Summary**: Lists scanned URLs grouped by HTTP status (200, 404, etc.)
+* **Interactive Graph**: A file named `site_map.html` will be created in your directory
 
-Enter the URL you want to scan (including http:// or https://) and select your desired scan depth.
+### Example Visualization (site\_map.html):
 
-## Output
+> *This is a placeholder description for the HTML output.*
 
-- **Console Output**: Detailed scan results including:
-  - Total unique URLs scanned
-  - Similar URLs found
-  - Status codes for each URL
-  - Content types and sizes
-  - Error reports if any
+In the graph:
 
-- **Visual Output**: An interactive HTML file (`site_map.html`) containing:
-  - Color-coded nodes representing different types of resources
-  - Clickable nodes that open the corresponding URLs
-  - Hover tooltips with detailed information
-  - Force-directed graph layout for optimal visualization
+* **Nodes** represent pages or links.
+* **Edges** are connections between pages.
+* **Colors** show status (e.g., Blue = 200 OK, Red = 404 Error).
+* **Clickable**: Click nodes to open the URL in a browser.
 
-## Color Coding
+---
 
-The visualization uses different colors to represent various types of resources:
-- 🔵 Blue: HTML pages
-- 🟠 Orange: Images
-- 🟢 Green: JavaScript files
-- 🟣 Purple: CSS files
-- 🔴 Red: Error states
+## 📝 Author
 
-## Features in Detail
-
-### URL Normalization
-- Removes trailing slashes
-- Eliminates fragments and query parameters
-- Standardizes relative URLs to absolute URLs
-
-### Similar URL Detection
-- Groups URLs with identical paths but different parameters
-- Reduces redundancy in the visualization
-- Maintains relationships between similar resources
-
-### Rate Limiting
-- Implements a 100ms delay between requests
-- Prevents overwhelming target servers
-- Configurable rate limit settings
-
-## Notes
-
-- The crawler respects basic rate limiting but does not implement robots.txt parsing
-- Some websites may block automated requests
-- Use responsibly and in accordance with the target website's terms of service
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Author
-
-Created by AMIRX
-
-## Contributing
-
-Contributions, issues, and feature requests are welcome! 
+Created with ❤️ by **AMIRX**
