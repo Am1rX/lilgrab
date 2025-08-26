@@ -10,7 +10,7 @@ Perfect for:
 * Understanding a website's structure
 * Finding broken links
 
-The script uses `asyncio` and `aiohttp` for high-speed, concurrent scanning, and generates a visual graph using `pyvis` and `networkx`. The command-line UI is powered by `rich` for an elegant experience.
+The script uses `asyncio` and `aiohttp` for high-speed, concurrent scanning and generates a visual graph using `pyvis` and `networkx`. The command-line UI is powered by `rich` for an elegant experience.
 
 ---
 
@@ -58,10 +58,10 @@ Requires **Python 3.7+** and the following libraries:
 
 ## 🖥️ How to Use
 
-Run the script from terminal:
+Run the script from the terminal:
 
 ```bash
-python link_grabber.py
+python linkgrabber.py
 ```
 
 ### You'll be prompted to:
